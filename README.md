@@ -1,38 +1,51 @@
-# Easel
+<div align="center">
 
-上传一个 ZIP（或单个 HTML 文件），得到一个 `<项目名>.你的域名`。整套东西跑在 Cloudflare 免费额度内，成本 $0，上线只需要一条 `npm run deploy`。
+# 🎨 Easel
 
-访客看到的是根域名上的**入口页**：列出所有托管中的页面，点开任意一个直接浏览，右上角有进管理后台的入口。你自己在 `admin.<你的域名>` 上传和删除。
+**上传一个 ZIP，得到一个网站。**
 
-核心取舍只有一句话：**解压放在浏览器里做，不放服务端**。Workers 免费版每次调用只有 10ms CPU、128MB 内存、50 个子请求，服务端解压稍大的包必然超时；挪到浏览器之后这三条限制全部消失，而且 R2 本身没有 25MiB 单文件限制，能托管的项目比"每个项目建一个 Pages 站点"的方案宽得多。
+解压在浏览器里完成，Cloudflare 只管存储和分发 —— 所以免费额度就够，成本 $0。
 
----
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Cloudflare](https://img.shields.io/badge/Cloudflare-Workers_%C2%B7_R2_%C2%B7_D1-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
+[![Tests](https://img.shields.io/badge/smoke_tests-60_passing-brightgreen)](scripts/smoke-test.mjs)
 
-## 目录
+[特性](#-特性) · [原理](#-它是怎么工作的) · [快速开始](#-快速开始) · [部署上线](#-部署上线) · [常见问题](#-常见问题)
 
-- [它是怎么工作的](#它是怎么工作的)
-- [上线步骤（从零开始）](#上线步骤从零开始)
-- [日常使用](#日常使用)
-- [本地开发与测试](#本地开发与测试)
-- [免费额度核算](#免费额度核算)
-- [已知的取舍与限制](#已知的取舍与限制)
-- [故障排查](#故障排查)
-- [目录结构](#目录结构)
+</div>
 
 ---
 
-## 它是怎么工作的
+<!-- 截图占位：截图后放到 docs/screenshots/ 并取消注释
+<p align="center">
+  <img src="docs/screenshots/landing.png" width="49%" alt="对外入口页">
+  <img src="docs/screenshots/admin.png" width="49%" alt="管理后台">
+</p>
+-->
+
+## ✨ 特性
+
+- **💸 零成本** — Workers + R2 + D1 全部落在免费额度内，附[逐项核算](#-免费额度核算)
+- **🧊 浏览器端解压** — ZIP 在访客上传者的浏览器里用 Web Worker 流式解开，绕开 Workers 免费版 10ms CPU / 128MB 内存 / 50 子请求三重限制（这是服务端解压方案必然超时的原因）
+- **🌐 子域名隔离** — 每个项目一个 `<项目名>.你的域名`，项目内绝对路径互不串扰，不改写 HTML
+- **⚡ 部署即生效** — 边缘缓存键包含部署版本号，重新部署立即全局生效，不用等 TTL
+- **🖥️ 自带入口页** — 根域名自动渲染项目收藏页（搜索 + 统计 + 后台入口），管理后台由 Worker 自己托管，不用 Cloudflare Pages
+- **🛡️ 内置防护** — 路径穿越拦截、系统垃圾文件过滤、HMAC 签名会话、常量时间口令比较
+- **✅ 60 项端到端测试** — `npm run smoke` 用真实 ZIP 走完登录、上传、分发、覆盖部署、删除全流程
+
+## 🧭 它是怎么工作的
 
 | 环节 | 由谁负责 |
 | :--- | :--- |
-| 解压 ZIP | 你的浏览器（`public/unzip-worker.js`，用 fflate 在 Web Worker 里流式解压） |
+| 解压 ZIP | 你的浏览器（`public/unzip-worker.js`，用 fflate 流式解压） |
 | 分片上传 | 浏览器按「≤40 个文件 / ≤20MB」一批推给 `/api/projects/<名字>/files` |
-| 存文件 | Worker 把每个文件写到 R2，键是 `<项目名>/<路径>` |
+| 存文件 | Worker 写入 R2，键为 `<项目名>/<路径>` |
 | 存元数据 | D1（入口文件名、文件数、体积、部署版本） |
 | 对外入口页 | 根域名上由 Worker 渲染项目列表 + 后台入口（`src/landing.js`） |
 | 分发访问 | 同一个 Worker 按 Host 取项目名 → 读 R2 → 按 `deploy_id` 做边缘缓存 |
 
-三个 Host 各司其职，只需要两条路由（都由部署脚本从 `ROOT_DOMAIN` 自动生成）：
+三个 Host 各司其职，只需要两条路由（由部署脚本从 `ROOT_DOMAIN` 自动生成）：
 
 ```
 <你的域名>            ->  对外入口页（项目列表 + 后台入口）     路由：<域名>/*
@@ -40,17 +53,44 @@ admin.<你的域名>      ->  管理后台界面 + /api/*               路由�
 <项目名>.<你的域名>    ->  该项目在 R2 里的静态文件  ─────────┘
 ```
 
-通配路由**不匹配根域名本身**，所以根域名那条必须单独写一条。两条都是 zone route，因此不会撞上"每个域名 100 个自定义域名"的上限。
-
-管理后台由 Worker 自己托管（Workers Static Assets），不用 Cloudflare Pages —— Pages 不支持通配自定义域名，而且有 100 个项目 / 20000 文件 / 每月 500 次构建的限制。
+通配路由**不匹配根域名本身**，所以根域名那条必须单独写。两条都是 zone route，不会撞上"每个域名 100 个自定义域名"的上限。
 
 **为什么选子域名而不是路径**：子域名天然隔离，项目里的 `/style.css` 这类绝对路径不会串到别的项目，不需要改写 HTML，也不用担心 `<base>`。
 
----
+**为什么不用 Cloudflare Pages**：Pages 不支持通配自定义域名，且有 100 个项目 / 20000 文件 / 每月 500 次构建的限制；R2 方案没有这些天花板。
 
-## 上线步骤（从零开始）
+## 🚀 快速开始
 
-全新账号大约 15 分钟。下面每一步都给出实际命令、预期输出和常见报错 —— 建议按顺序走，每步验证过再进行下一步，出问题能立刻定位到环节。
+本地跑起来不需要 Cloudflare 账号 —— Miniflare 会在本地模拟 R2 和 D1。
+
+```bash
+git clone <你的仓库地址> easel && cd easel
+npm install                # 安装依赖，并把 fflate 拷入 public/vendor/
+cp .dev.vars.example .dev.vars
+npm run db:local           # 给本地 D1 建表
+npm run dev                # http://127.0.0.1:8787
+```
+
+| 看什么 | 地址 |
+| :--- | :--- |
+| 访客视角的入口页 | `http://127.0.0.1:8787/` 或 `http://localhost:8787/` |
+| 管理后台 | `http://admin.localhost:8787/` |
+| 某个项目 | `http://<项目名>.localhost:8787/` |
+
+本地口令在 `.dev.vars` 里（模板默认 `dev-password-change-me`）。Chrome 会把 `*.localhost` 解析到 `127.0.0.1`，三个地址都能直接访问。
+
+跑测试：
+
+```bash
+npm run smoke    # 另开一个终端跑着 npm run dev，然后用真实 ZIP 走 60 项断言
+```
+
+> [!TIP]
+> 改了服务端代码后如果页面没变化，是浏览器缓存 —— 入口页 60 秒、资源 10 分钟。加个 `?v=1` 或 `?fresh=1` 立刻看到最新内容。
+
+## 📖 部署上线
+
+从零开始、全新账号大约 15 分钟。建议按顺序走，每步验证过再进行下一步，出问题能立刻定位到环节。
 
 <details>
 <summary>已经熟悉 wrangler 的话，最短路径（点开）</summary>
@@ -72,23 +112,18 @@ npm run deploy
 
 ### 第 0 步：准备账号、域名和环境
 
-**0.1 Cloudflare 账号**
+**0.1 Cloudflare 账号** — 没有就去 [dash.cloudflare.com](https://dash.cloudflare.com) 注册，免费套餐足够。
 
-没有就去 [dash.cloudflare.com](https://dash.cloudflare.com) 注册，免费套餐足够。
-
-**0.2 域名必须已经托管在 Cloudflare**
-
-判断方法：Dashboard 首页能看到这个域名，且状态是「有效 / Active」。域名在别处注册的话，需要先把 NS 改成 Cloudflare 给的那两个地址，等生效（通常几分钟，最长 24 小时）。
+**0.2 域名必须已经托管在 Cloudflare** — 判断方法：Dashboard 首页能看到这个域名，且状态是「有效 / Active」。域名在别处注册的话，需要先把 NS 改成 Cloudflare 给的那两个地址，等生效（通常几分钟，最长 24 小时）。
 
 为什么必须：本项目靠 Workers 路由（`*.<域名>/*`）工作，只有托管在 Cloudflare 的域名才能配路由，也才能拿到 `*.<域名>` 的免费证书。
 
 **0.3 开通 R2 订阅**
 
-R2 即使只用免费额度，也要先在账号里**走一次开通流程**：
-
-Dashboard → 左侧 **Storage & databases** → **R2** → **Overview** → 按提示完成 checkout。
-
-这一步会要求添加支付方式。免费额度内的用量（10GB 存储 + 每月 100 万次 A 类 + 1000 万次 B 类操作）不产生费用，但**不做这一步，第 1 步创建桶会直接失败**。
+> [!IMPORTANT]
+> R2 即使只用免费额度，也要先在账号里**走一次开通流程**，否则第 1 步创建桶会直接失败。
+> 路径：Dashboard → **Storage & databases** → **R2** → **Overview** → 按提示完成 checkout。
+> 这一步会要求添加支付方式；免费额度内（10GB 存储 + 每月 100 万次 A 类 + 1000 万次 B 类操作）不产生费用。
 
 **0.4 Node 环境与 wrangler 登录**
 
@@ -113,7 +148,7 @@ npx wrangler r2 bucket create <你的桶名>
 - 3–63 个字符，只能用小写字母、数字、连字符，首尾必须是字母或数字
 - 建议加个随机后缀，例如 `html-hosting-a7f3c1`
 
-命令输出会显示桶名和位置提示（location hint）。成功后把桶名填进 `wrangler.jsonc`：
+成功后把桶名填进 `wrangler.jsonc`：
 
 ```jsonc
   "r2_buckets": [
@@ -130,9 +165,8 @@ npx wrangler r2 bucket create <你的桶名>
 npx wrangler r2 bucket list      # 应该能看到刚建的桶
 ```
 
+> [!WARNING]
 > 别用 `--update-config` 让 wrangler 自动改配置：它会直接重写 `wrangler.jsonc`、把里面的注释丢掉。手工粘贴上面这一处更稳妥。
-
-**常见报错**：提示需要 R2 订阅 → 第 0.3 步没做。
 
 ### 第 2 步：创建 D1 数据库
 
@@ -160,7 +194,8 @@ npx wrangler d1 create html-hosting
 npx wrangler d1 list
 ```
 
-> 注意区分：`database_name` 是给人看的名字（账号内唯一），`database_id` 是 UUID（全局标识）。要填的是 **id**。
+> [!NOTE]
+> `database_name` 是给人看的名字（账号内唯一），`database_id` 是 UUID（全局标识）。要填的是 **id**。
 
 ### 第 3 步：建表
 
@@ -170,9 +205,7 @@ npm run db:remote
 
 实际执行的是 `wrangler d1 execute html-hosting --remote --file=schema.sql -y`，只做一件事：在**线上** D1 里建 `projects` 表和索引。语句是 `CREATE TABLE IF NOT EXISTS`，重复执行也安全。
 
-预期输出里有 `2 commands executed successfully`。
-
-验证表确实建好了：
+预期输出里有 `2 commands executed successfully`。验证表确实建好了：
 
 ```bash
 npx wrangler d1 execute html-hosting --remote --command "SELECT name FROM sqlite_master WHERE type='table'"
@@ -180,7 +213,8 @@ npx wrangler d1 execute html-hosting --remote --command "SELECT name FROM sqlite
 
 应该看到 `projects`。
 
-**常见报错**：后台报 `no such table: projects` → 这一步没做，或者做成了 `--local`。本地开发用 `npm run db:local`，两者互不影响。
+> [!WARNING]
+> 后台报 `no such table: projects` → 这一步没做，或者做成了 `--local`。本地开发用 `npm run db:local`，两者互不影响。
 
 ### 第 4 步：填配置变量
 
@@ -233,6 +267,9 @@ nslookup anything.mydomain.dev
 
 返回 **Cloudflare 的 IP**（而不是 `192.0.2.1`）就说明代理生效了。
 
+> [!NOTE]
+> 通配记录是多级的，但免费版 Universal SSL 只覆盖一层子域名 —— 所以 `a.mydomain.dev` 能用，`a.b.mydomain.dev` 会证书错误。本项目按一层设计。
+
 ### 第 6 步：设置两个密钥
 
 这两个是 Worker Secret，存在 Cloudflare 侧、不属于代码库。它们**不是** `vars` —— `vars` 会明文写进配置文件，只能放非敏感内容。
@@ -259,9 +296,11 @@ npx wrangler secret put AUTH_SECRET
 npx wrangler secret list      # 应该列出 ADMIN_PASSWORD 和 AUTH_SECRET
 ```
 
-几个要点：
+> [!WARNING]
+> 不要在命令行参数里传口令（比如 `echo "xxx" | wrangler secret put ...`），那样会留在 shell 历史里。交互式粘贴最安全。
 
-- **不要在命令行参数里传口令**（比如 `echo "xxx" | wrangler secret put ...`），那样会留在 shell 历史里。交互式粘贴最安全。
+要点：
+
 - Secret 存在 Cloudflare 侧，**后续 `wrangler deploy` 不会覆盖或清掉它们**，只有再执行一次 `secret put` 才会改。
 - 首次部署前必须先设好，否则后台会提示"服务端未设置 ADMIN_PASSWORD"。
 - 本地开发读的是 `.dev.vars` 里的同名变量，与线上互不影响。
@@ -291,7 +330,7 @@ Deployed html-hosting triggers
 
 **只要最后能看到你期望的两条路由**（`<域名>/*` 和 `*.<域名>/*`），就说明路由挂上了。
 
-**常见报错**：
+**常见报错**（前三条来自 preflight，它会先打印 `✖ 部署前检查未通过：`，再逐条列出来）：
 
 | 报错 | 原因 |
 | :--- | :--- |
@@ -356,7 +395,7 @@ npx wrangler deployments status   # 当前线上生效的版本
 
 预期：新项目出现在列表里。入口页给浏览器缓存了 60 秒，等一会儿或加 `?v=1` 立刻看到。
 
-### 部署后建议做的一件事：给登录接口限流
+### 部署后建议：给登录接口限流
 
 口令只有一层保护。代码里有常量时间比较和单 isolate 内的尝试节流，但没有全局限流。免费套餐含 1 条 WAF 速率限制规则，加一条就够：
 
@@ -387,9 +426,7 @@ npx wrangler d1 delete html-hosting       # 删数据库
 
 最后回 Dashboard 的 DNS 页面手动删掉那两条 `A` 记录。
 
----
-
-## 日常使用
+## 🕹️ 日常使用
 
 **对访客**（`https://你的域名/`）：
 
@@ -420,9 +457,7 @@ npx wrangler d1 delete html-hosting       # 删数据库
 - 找不到时，如果项目里有 `404.html` 就返回它
 - 加 `?fresh=1` 绕过所有缓存，用来核对线上内容
 
----
-
-## 本地开发与测试
+## 🧪 本地开发与测试
 
 ```bash
 cp .dev.vars.example .dev.vars      # 本地密钥模板，已在 .gitignore 里
@@ -430,21 +465,7 @@ npm run db:local                     # 给本地 D1 建表
 npm run dev                          # http://127.0.0.1:8787
 ```
 
-本地不需要 Cloudflare 账号 —— Miniflare 会在 `.wrangler/state` 里模拟 R2 和 D1。
-
-**本地有两个入口**（Chrome 会把 `*.localhost` 解析到 `127.0.0.1`）：
-
-| 看什么 | 地址 |
-| :--- | :--- |
-| 访客视角的入口页 | `http://127.0.0.1:8787/` 或 `http://localhost:8787/` |
-| 管理后台 | `http://admin.localhost:8787/` |
-| 某个项目 | `http://<项目名>.localhost:8787/` |
-
-`.dev.vars` 里把 `ROOT_DOMAIN` 设成 `localhost` 就是为了让这三者各归其位。
-
-> 本地改了入口页的文案后如果没看到变化，是浏览器缓存了 60 秒 —— 加个 `?v=1` 之类的查询串就能立刻看到。
-
-**自动化冒烟测试**：另开一个终端跑 `npm run dev`，然后
+自动化冒烟测试（另开一个终端跑着 `npm run dev`）：
 
 ```bash
 npm run smoke
@@ -452,11 +473,10 @@ npm run smoke
 
 会用真实 ZIP 走完整流程，覆盖 60 项断言：鉴权、项目名校验、路径穿越拦截、分片上传、入口文件校验、子域名分发、Content-Type、ETag 304、无扩展名回退、404、对外入口页（含「admin 子域名不被入口页顶掉」这条回归）、覆盖部署与残留清理、边缘缓存命中/绕过、删除。改完代码跑一遍，比手点可靠。
 
-> ⚠️ 一个容易踩的坑：**不要把 `routes` 写回 `wrangler.jsonc`**。只要配置里存在 routes，`wrangler dev` 的本地服务器就会把所有请求的 Host 重写成路由域名（实测会把任何 Host 变成 `example.com`），于是本地完全没法测试子域名分发。这就是路由被挪到部署时生成的原因，详见 `scripts/build-config.mjs` 顶部注释。
+> [!WARNING]
+> **不要把 `routes` 写回 `wrangler.jsonc`。** 只要配置里存在 routes，`wrangler dev` 的本地服务器就会把所有请求的 Host 重写成路由域名（实测会把任何 Host 变成 `example.com`），本地完全没法测试子域名分发。这就是路由被挪到部署时生成的原因，详见 `scripts/build-config.mjs` 顶部注释。
 
----
-
-## 免费额度核算
+## 📊 免费额度核算
 
 以 200 个项目、每个 1000 个文件共 5MB 计：
 
@@ -473,44 +493,49 @@ npm run smoke
 
 另外 R2 免费额度只适用于 Standard 存储，出口流量免费。
 
----
-
-## 已知的取舍与限制
+## ⚠️ 限制与取舍
 
 - **浏览器缓存有延迟**：边缘缓存按 `deploy_id` 换键，重新部署在边缘是**立刻全局生效**的；但访客浏览器自己的副本要等 `max-age` 过期（HTML 60 秒，其他资源 10 分钟）。给资源换文件名可以立刻绕过。想调这两个值改 `src/mime.js` 的 `cacheControlFor`。入口页同理缓存 60 秒（改文案后加 `?v=1` 可立刻看到）。
 - **单次上传体积上限**：单文件 ≤50MB、单批 ≤30MB、单项目解压后 ≤300MB、≤5000 个文件。这些是浏览器内存和 Workers 请求体（100MB）限制推导出来的，常量写在 `public/unzip-worker.js` 和 `src/api.js` 顶部。
-- **口令暴力破解防护有限**：只有常量时间比较 + 单 isolate 内的尝试节流，没有全局限流。建议在 Dashboard → Security → WAF → Rate limiting rules 里对 `/api/login` 加一条规则（免费套餐含 1 条）。
+- **口令暴力破解防护有限**：只有常量时间比较 + 单 isolate 内的尝试节流，没有全局限流。建议按上面的说明加一条 WAF 速率限制规则。
 - **项目名必须是合法 DNS 标签**：小写字母数字与连字符，≤40 字符，不能连续连字符，且不能在保留名单里（`www`/`admin`/`api`/`mail` 等，见 `src/util.js`）。
 - **`www.<域名>` 会 302 到根域名**，不参与托管。
 - **会话 Cookie 有效期 7 天**，过期后重新登录。
 
 **刻意不做的事**：不改写项目内的绝对路径引用（子域名方案天然隔离，这正是选它的原因）、不做多用户注册、不做访问统计、不生成缩略图、默认不保留原始 ZIP。
 
----
+## ❓ 常见问题
 
-## 故障排查
+**为什么解压放在浏览器，而不是 Worker 里？**
+Workers 免费版每次调用只有 10ms CPU、128MB 内存、50 个子请求。服务端解压稍大的包必然触发 1102 超时，而且往 R2 写每个文件都算一次子请求，50 个文件就是上限。挪到浏览器后这三条限制全部消失，R2 本身也没有 25MiB 单文件限制。
+
+**忘记后台口令怎么办？**
+`npx wrangler secret put ADMIN_PASSWORD` 重新设一个即可，立即生效，不需要重新部署。
+
+**为什么我的项目里 `/style.css` 加载不到别的项目的内容？**
+不会发生 —— 每个项目在独立子域名上，浏览器同源策略和键前缀双重隔离。这正是选子域名方案的原因。
+
+**上传失败提示"单批请求过大"？**
+多半是单个文件超过 50MB，或某一批总字节超过 30MB。日志区会写明是哪一批。超大视频建议放 R2 单独托管或外链。
+
+其余部署问题见[部署上线](#-部署上线)各步的报错表，或下面的排查表：
 
 | 现象 | 原因 |
 | :--- | :--- |
 | 访问 `<项目>.<域名>` 显示的是管理后台 | `vars.ROOT_DOMAIN` 和实际域名不一致，或通配 DNS 记录没建/没开代理 |
-| 根域名打开是 404，或还是原来那个站点 | 根域名的 A 记录（名称 `@`）没建或没开代理，或者 `LANDING_AT_APEX` 是 `false` 而根域名没走 Worker |
+| 根域名打开是 404，或还是原来那个站点 | 根域名的 `@` A 记录（名称 `@`）没建或没开代理，或者 `LANDING_AT_APEX` 是 `false` 而根域名没走 Worker |
 | 改了 `SITE_TITLE` 但入口页没变 | 入口页给浏览器缓存了 60 秒，等一会儿或加 `?v=1` 强制刷新 |
 | 某个项目没出现在入口页 | 它还在上传中（`status != ready`），部署完成才会出现 |
 | `npm run deploy` 报 zone not found | 域名不在当前登录的账号下，或 `wrangler login` 登错了账号 |
-| 后台提示"服务端未设置 ADMIN_PASSWORD" | 第 6 步的 secret 没设，或没重新部署 |
-| 上传到一半失败 | 单批请求超限（多半是单文件超过 50MB，或某批总字节超 30MB）；日志区会写明是哪一批 |
 | 部署一直停在"正在部署" | 上次上传中断了。重新部署一次即可覆盖 |
 | 内容更新了但页面没变 | 先加 `?fresh=1` 排除边缘缓存；如果是浏览器自己的副本，等 max-age 过期或强制刷新 |
 | 项目名提示"已被占用" | 名字被别的项目用了。删掉旧项目或换个名字 |
-| 想换成另一个域名 | 改 `wrangler.jsonc` 的 `ROOT_DOMAIN` → 建新的 DNS 记录（根域名 + 通配两条）→ `npm run deploy` |
 
----
-
-## 目录结构
+## 📁 项目结构
 
 ```
-├─ wrangler.jsonc          主配置（不含 routes，原因见上面那个坑）
-├─ wrangler.deploy.jsonc   部署时自动生成，含通配路由，不要手改
+├─ wrangler.jsonc          主配置（不含 routes，原因见本地开发一节的警告）
+├─ wrangler.deploy.jsonc   部署时自动生成，含两条路由，不要手改
 ├─ schema.sql              D1 建表语句
 ├─ .dev.vars.example       本地密钥模板
 ├─ src/
@@ -533,3 +558,18 @@ npm run smoke
    ├─ build-config.mjs     生成带路由的部署配置
    └─ smoke-test.mjs       60 项端到端断言
 ```
+
+## 🧰 技术栈
+
+| 层 | 选型 | 说明 |
+| :--- | :--- | :--- |
+| 运行时 | [Cloudflare Workers](https://workers.cloudflare.com/) | 免费版，100k 请求/天 |
+| 存储 | [Cloudflare R2](https://developers.cloudflare.com/r2/) | S3 兼容，出口流量免费 |
+| 元数据 | [Cloudflare D1](https://developers.cloudflare.com/d1/) | 服务端 SQLite |
+| 解压 | [fflate](https://github.com/101arrowz/fflate) | 纯 JS，浏览器端流式解压 |
+| 前端 | 原生 ES Modules | 无框架、无构建步骤 |
+| 测试 | Node 原生脚本 | `npm run smoke`，60 项端到端断言 |
+
+## 📄 许可证
+
+[MIT](LICENSE) © 2026 cokar
