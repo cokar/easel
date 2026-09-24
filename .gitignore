@@ -1,0 +1,8 @@
+node_modules/
+.wrangler/
+.dev.vars
+.zcode/
+public/vendor/fflate.js
+wrangler.deploy.jsonc
+*.log
+.DS_Store

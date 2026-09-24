@@ -1,0 +1,18 @@
+# 本地开发用的变量与密钥。复制成 .dev.vars 后按需修改：
+#   cp .dev.vars.example .dev.vars
+#
+# .dev.vars 已在 .gitignore 里，不会被提交。
+# 这些值只在 `wrangler dev`（本地）生效，不会影响线上；
+# 线上请用 `npx wrangler secret put <名字>` 单独设置。
+
+# 本地开发把根域名设成 localhost：
+#   后台界面  http://127.0.0.1:8787/  或  http://admin.localhost:8787/
+#   项目页面  http://<项目名>.localhost:8787/   （Chrome 会把 *.localhost 解析到 127.0.0.1）
+ROOT_DOMAIN=localhost
+ADMIN_SUBDOMAIN=admin
+
+# 本地随便设一个就行，不要和线上的口令相同
+ADMIN_PASSWORD=dev-password-change-me
+
+# 至少 16 个字符。生成一个：node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+AUTH_SECRET=dev-only-secret-please-change-0000000000

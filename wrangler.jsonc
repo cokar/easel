@@ -1,0 +1,60 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "html-hosting",
+  "main": "src/index.js",
+  "compatibility_date": "2025-09-01",
+
+  "observability": {
+    "enabled": true
+  },
+
+  // 管理后台的静态文件由 Worker 自己托管，不需要 Cloudflare Pages。
+  // run_worker_first = true 让所有请求先进 Worker，由 Worker 决定是分发项目还是返回后台界面。
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+
+  // 解压后的文件按 "<项目名>/<路径>" 存进这个桶。
+  // 注意：R2 桶名在全球范围内唯一，如果 "html-hosting" 被占用请换一个名字并同步修改这里。
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "html-hosting"
+    }
+  ],
+
+  // 元数据存 D1。不要换成 KV —— KV 免费版每天只有 1000 次写入。
+  // 先跑 `npx wrangler d1 create html-hosting`，把返回的 database_id 填到这里。
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "html-hosting",
+      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+    }
+  ],
+
+  "vars": {
+    // ⚠️ 改成你自己的、已托管在 Cloudflare 的域名。
+    // 路由会在部署时由 scripts/build-config.mjs 从这里自动推导出来，所以你只需要改这一处：
+    //   <ROOT_DOMAIN>/*    -> 对外入口页（项目列表 + 后台入口）
+    //   *.<ROOT_DOMAIN>/*  -> admin.<域名> 后台，以及所有 <项目>.<域名>
+    "ROOT_DOMAIN": "example.com",
+    "ADMIN_SUBDOMAIN": "admin",
+
+    // 入口页上显示的标题和副标题
+    "SITE_TITLE": "我的网页收藏",
+    "SITE_DESCRIPTION": "这里托管着我收集的静态页面，点开任意一个都能直接浏览。",
+
+    // 如果你的根域名上已经挂了别的站点，把这里改成 false：
+    // 部署脚本就不会生成根域名那条路由，根域名不会被顶掉，
+    // 入口页改用 www.<域名> 或别的子域名访问。
+    "LANDING_AT_APEX": true
+  }
+
+  // 注意：这里故意不写 routes。
+  // 一旦配置里存在 routes，`wrangler dev` 会把所有请求的 Host 重写成路由域名，
+  // 本地就没法用 myproj.localhost 测试子域名分发了。
+  // 部署用的路由由 `npm run deploy` 生成到 wrangler.deploy.jsonc，见那个脚本里的说明。
+}

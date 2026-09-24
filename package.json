@@ -1,0 +1,25 @@
+{
+  "name": "cloudflare-html-hosting",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "上传 ZIP，自动托管为 <项目名>.你的域名 —— 纯 Cloudflare 免费额度方案",
+  "scripts": {
+    "vendor": "node scripts/vendor.mjs",
+    "dev": "wrangler dev",
+    "config": "node scripts/build-config.mjs",
+    "deploy": "node scripts/preflight.mjs && node scripts/build-config.mjs && wrangler deploy -c wrangler.deploy.jsonc",
+    "preflight": "node scripts/preflight.mjs",
+    "smoke": "node scripts/smoke-test.mjs",
+    "db:local": "wrangler d1 execute html-hosting --local --file=schema.sql -y",
+    "db:remote": "wrangler d1 execute html-hosting --remote --file=schema.sql -y",
+    "postinstall": "node scripts/vendor.mjs"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2"
+  },
+  "devDependencies": {
+    "jsonc-parser": "^3.3.1",
+    "wrangler": "^4.131.0"
+  }
+}
